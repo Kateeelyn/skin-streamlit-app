@@ -1,22 +1,20 @@
-# Streamlit web app framework
+# ===== Web app =====
 streamlit==1.38.0
 
-# Core scientific stack (pinned to versions compatible with TF 2.15)
+# ===== Scientific stack (与 TF 2.15 兼容的版本) =====
 numpy==1.26.4
 pandas==2.2.2
 matplotlib==3.8.4
 Pillow==10.3.0
 
-# Machine learning (for .keras model loading)
-tensorflow==2.15.0
-# 如果以后确认真的需要 AutoKeras 再加回来，先注释掉
-# autokeras==1.1.0
+# ===== Machine learning (只用 CPU 版，更轻量) =====
+tensorflow-cpu==2.15.0
 
-# Google Drive API access
+# ===== Google Drive API =====
 google-api-python-client==2.138.0
 google-auth==2.33.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 
-# Miscellaneous – TensorFlow 2.15 需要旧一点的 protobuf
+# ===== 兼容性修复 =====
 protobuf<4.25.0
