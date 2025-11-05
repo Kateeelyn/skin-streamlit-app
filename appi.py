@@ -506,6 +506,22 @@ with TAB2:
             class_names = sorted(df_full["dx"].unique().tolist())
             st.session_state["_class_names"] = class_names
             st.write("Classes found in FULL metadata:", class_names)
+            # Add explanation of diagnostic abbreviations
+            st.markdown("**Class abbreviation meanings:**")
+            class_expl = {
+                "akiec": "Actinic keratoses and intraepithelial carcinoma / Bowen’s disease",
+                "bcc": "Basal cell carcinoma",
+                "bkl": "Benign keratosis-like lesions (solar lentigines / seborrheic keratoses / lichen-planus like keratoses)",
+                "df": "Dermatofibroma",
+                "mel": "Melanoma",
+                "nv": "Melanocytic nevi",
+                "vasc": "Vascular lesions (angiomas, angiokeratomas, pyogenic granulomas, hemorrhage)"
+            }
+            # Display nicely formatted as a Markdown table
+            st.markdown("| Abbreviation | Full Diagnosis |")
+            st.markdown("|--------------|----------------|")
+            for k, v in class_expl.items():
+                st.markdown(f"| `{k}` | {v} |")
 
             # ---------- Step 2: pie chart using FULL metadata ----------
             st.info("Rendering class distribution pie chart (FULL metadata) ...")
