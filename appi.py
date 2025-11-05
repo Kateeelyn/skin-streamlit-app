@@ -479,42 +479,25 @@ with TAB2:
 
             ensure_drive_available()
 
-            # ---- Step 1: 从 ZIP 里读两个 metadata CSV ----
-            st.info("Step 1/3: Downloading ZIP (metadata + images) from Google Drive ...")
-            with st.spinner("Downloading dataset ZIP from Drive ..."):
-                zip_bytes = get_dataset_zip_bytes()
+            # ---------- Step 1: FULL metadata from separate CSV (for pie chart) ----------
+            st.info("Step 1/3: Downloading FULL metadata CSV from Google Drive ...")
+            with st.spinner("Downloading FULL metadata CSV from Drive ..."):
+                csv_bytes_full = gdrive_download_bytes(METADATA_FILE_ID)
 
-            zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
-            namelist = zf.namelist()
+            if not csv_bytes_full:
+                raise RuntimeError("gdrive_download_bytes returned empty bytes for METADATA_FILE_ID")
 
-            # 这里假设你在 ZIP 里这两个文件名是这样：
-            FULL_META_NAME = "HAM10000_metadata.csv"          # 完整 metadata
-            SMALL_META_NAME = "HAM10000_metadata_small.csv"   # 小的 metadata，用于预览图片
-            # 如果你的文件名不一样，就把上面两个字符串改成你压缩包里的实际名字
+            df_full = pd.read_csv(io.BytesIO(csv_bytes_full))
+            st.success(f"Loaded FULL metadata CSV with {len(df_full)} rows.")
+            st.write("FULL metadata head:", df_full.head())
 
-            if FULL_META_NAME not in namelist:
-                raise RuntimeError(f"{FULL_META_NAME} not found inside ZIP.")
-            if SMALL_META_NAME not in namelist:
-                raise RuntimeError(f"{SMALL_META_NAME} not found inside ZIP.")
-
-            # full metadata 用来画饼图
-            df_full = pd.read_csv(zf.open(FULL_META_NAME))
-            # small metadata 用来选要显示的图片
-            df_small = pd.read_csv(zf.open(SMALL_META_NAME))
-
-            st.success(
-                f"Loaded full metadata ({len(df_full)} rows) "
-                f"and small metadata ({len(df_small)} rows) from ZIP."
-            )
-            st.write("Full metadata head:", df_full.head())
-
-            # Cache class names for Tab 1 (用完整 metadata 的类别)
+            # Cache class names for Tab 1 (use FULL metadata)
             class_names = sorted(df_full["dx"].unique().tolist())
             st.session_state["_class_names"] = class_names
             st.write("Classes found in FULL metadata:", class_names)
 
-            # ---- Step 2: 用完整 metadata 画类别分布饼图 ----
-            st.info("Rendering class distribution pie chart from FULL metadata ...")
+            # ---------- Step 2: pie chart using FULL metadata ----------
+            st.info("Rendering class distribution pie chart (FULL metadata) ...")
             counts = df_full["dx"].value_counts().sort_index()
             fig, ax = plt.subplots(figsize=(5, 5))
             ax.pie(counts.values, labels=counts.index, autopct="%1.1f%%")
@@ -522,9 +505,9 @@ with TAB2:
             st.pyplot(fig)
             st.success("Metadata preview finished ✅")
 
-            # ---- Step 3: 可选 — 用 small metadata + 图片做样例展示 ----
+            # ---------- Step 3: OPTIONAL – sample images using SMALL dataset (ZIP) ----------
             st.markdown("---")
-            st.subheader("Optional: sample images from SMALL dataset (faster)")
+            st.subheader("Optional: sample images from SMALL dataset in ZIP (faster)")
 
             show_images = st.checkbox(
                 "Load a few sample images per class from the SMALL dataset in the ZIP",
@@ -532,22 +515,50 @@ with TAB2:
             )
 
             if show_images:
-                st.info("Step 3/3: Loading sample images from SMALL dataset ...")
+                st.info("Step 3/3: Downloading SMALL dataset ZIP (metadata_small + images) ...")
+
+                # 3.1 下载小数据集 ZIP
+                with st.spinner("Downloading SMALL dataset ZIP from Drive ..."):
+                    zip_bytes = get_dataset_zip_bytes()
+
+                zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
+                namelist = zf.namelist()
+
+                # 3.2 在 ZIP 里找到 small metadata 的 CSV
+                #    这里自动寻找：所有 .csv 中优先文件名里包含 "small" 的那个；
+                #    如果没有 "small"，就用第一个 .csv。
+                small_csv_candidates = [n for n in namelist if n.lower().endswith(".csv")]
+                if not small_csv_candidates:
+                    raise RuntimeError("No CSV file found inside SMALL dataset ZIP.")
+
+                small_csv_name = None
+                for n in small_csv_candidates:
+                    if "small" in os.path.basename(n).lower():
+                        small_csv_name = n
+                        break
+                if small_csv_name is None:
+                    small_csv_name = small_csv_candidates[0]
+
+                df_small = pd.read_csv(zf.open(small_csv_name))
+                st.success(
+                    f"Loaded SMALL metadata from '{small_csv_name}' with {len(df_small)} rows."
+                )
+                st.write("SMALL metadata head:", df_small.head())
 
                 # 每个类别显示几张图
                 n_per_cls = st.slider("Samples per class to display", 1, 5, 3)
 
-                # 用图片文件名建一个 image_id -> zip member 映射（照旧用缓存函数）
+                # 3.3 用 ZIP 中的 JPG 构建 image_id -> zip 文件名映射（还是用你原来的缓存函数）
                 with st.spinner("Building image_id → ZIP member map (cached) ..."):
                     name_map = get_zip_name_map()
-                st.write(f"DEBUG: found {len(name_map)} JPG files in ZIP (SMALL dataset).")
+                st.write(f"DEBUG: found {len(name_map)} JPG files in SMALL ZIP.")
 
-                # 小数据集中有哪些 image_id 可以在 ZIP 里找到
                 available_ids = set(name_map.keys())
 
-                with st.spinner("Reading sample images from SMALL dataset in ZIP ..."):
+                # 3.4 每个类别，用 SMALL metadata + name_map 来展示图片
+                with st.spinner("Reading sample images from SMALL dataset ZIP ..."):
                     for cls in class_names:
-                        # 用 small metadata，但只保留这个类别 + 在 ZIP 中确实存在的图片
+                        # 用 SMALL metadata，但只保留这个类别 + 图片确实存在于 ZIP 的行
                         subset = df_small[
                             (df_small["dx"] == cls) & (df_small["image_id"].isin(available_ids))
                         ].copy()
