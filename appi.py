@@ -31,7 +31,7 @@ import tensorflow as tf
 # ---------------------------
 MODEL_FILE_ID = "15rQdpHiHI9HGBlKpRmlBfOsTmxUCI9m3"
 METADATA_FILE_ID = "11RG8Wf2YOxnN5oGbVXgEv1D5Nh_dAYwi"
-DATASET_ZIP_FILE_ID = "10vow4q65fKTYDLjVvveIpE36dPnyR8hu"
+DATASET_ZIP_FILE_ID = "1oypOScrmWuw3-vS8Mfg8nXj70suIawZt"
 EVAL_ACC_FILE_ID = "1mmjRXdAZpMVQYbOAtGz9adiP55CkT1qN"
 EVAL_CM_FILE_ID  = "1NyqjQldbgzNHqf7n3NQNEdV7wHF9ONDi"
 EVAL_LOSS_FILE_ID = "14Xz86Sn97uHRG_A5f5-xH3zKWGli2arH"
@@ -466,12 +466,6 @@ with TAB1:
 # ---------------------------
 # Tab 2 – Dataset Preview
 # ---------------------------
-# ---------------------------
-# Tab 2 – Dataset Preview
-# ---------------------------
-# ---------------------------
-# Tab 2 – Dataset Preview
-# ---------------------------
 with TAB2:
     st.subheader("Preview the dataset and class distribution")
 
@@ -483,73 +477,105 @@ with TAB2:
                 st.warning("Right now the preview only supports the Google Drive mode.")
                 st.stop()
 
-            # -------- Step 1: download metadata CSV --------
-            st.info("Step 1/4: Downloading metadata CSV from Google Drive ...")
             ensure_drive_available()
 
-            with st.spinner("Downloading metadata CSV from Drive ..."):
-                csv_bytes = gdrive_download_bytes(METADATA_FILE_ID)
-
-            if not csv_bytes:
-                raise RuntimeError("gdrive_download_bytes returned empty bytes for METADATA_FILE_ID")
-
-            df = pd.read_csv(io.BytesIO(csv_bytes))
-            st.success(f"Loaded metadata CSV with {len(df)} rows.")
-            st.write("Metadata head:", df.head())
-
-            # -------- Step 2: build image_id -> zip member name map --------
-            st.info("Step 2/4: Scanning dataset ZIP (image_id → file name map) ...")
-            with st.spinner("Building image_id → ZIP member map (cached) ..."):
-                name_map = get_zip_name_map()
-
-            st.write(f"DEBUG: found {len(name_map)} JPG files in ZIP.")
-
-            # -------- Step 3: cache class names --------
-            class_names = sorted(df["dx"].unique().tolist())
-            st.session_state["_class_names"] = class_names
-            st.write("Classes found in metadata:", class_names)
-
-            # Slider for how many samples per class to show
-            n_per_cls = st.slider("Samples per class to display", 1, 5, 3)
-
-            # -------- Step 4: load sample images per class from ZIP --------
-            st.info("Step 4/4: Reading sample images for each class from ZIP ...")
-            with st.spinner("Reading sample images from ZIP ..."):
+            # ---- Step 1: 从 ZIP 里读两个 metadata CSV ----
+            st.info("Step 1/3: Downloading ZIP (metadata + images) from Google Drive ...")
+            with st.spinner("Downloading dataset ZIP from Drive ..."):
                 zip_bytes = get_dataset_zip_bytes()
-                zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
 
-                for cls in class_names:
-                    subset = df[df["dx"] == cls].copy()
-                    total_cls = len(subset)
-                    if total_cls == 0:
-                        continue
+            zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
+            namelist = zf.namelist()
 
-                    subset = subset.sample(min(n_per_cls, total_cls), random_state=42)
+            # 这里假设你在 ZIP 里这两个文件名是这样：
+            FULL_META_NAME = "HAM10000_metadata.csv"          # 完整 metadata
+            SMALL_META_NAME = "HAM10000_metadata_small.csv"   # 小的 metadata，用于预览图片
+            # 如果你的文件名不一样，就把上面两个字符串改成你压缩包里的实际名字
 
-                    with st.expander(f"Class: {cls} — {total_cls} images in metadata"):
-                        cols = st.columns(n_per_cls)
-                        for i, (_, row) in enumerate(subset.iterrows()):
-                            img_id = row["image_id"]
-                            member_name = name_map.get(img_id)
-                            with cols[i % n_per_cls]:
-                                if member_name is None:
-                                    st.write(f"(image {img_id} not found in ZIP)")
-                                    continue
-                                try:
-                                    img_bytes = zf.read(member_name)
-                                    img = Image.open(io.BytesIO(img_bytes))
-                                    st.image(img, caption=f"{img_id}.jpg")
-                                except Exception as img_err:
-                                    st.write(f"(image {img_id} not displayable: {img_err})")
+            if FULL_META_NAME not in namelist:
+                raise RuntimeError(f"{FULL_META_NAME} not found inside ZIP.")
+            if SMALL_META_NAME not in namelist:
+                raise RuntimeError(f"{SMALL_META_NAME} not found inside ZIP.")
 
-            # -------- Class distribution pie chart --------
-            st.info("Rendering class distribution pie chart ...")
-            counts = df["dx"].value_counts().sort_index()
+            # full metadata 用来画饼图
+            df_full = pd.read_csv(zf.open(FULL_META_NAME))
+            # small metadata 用来选要显示的图片
+            df_small = pd.read_csv(zf.open(SMALL_META_NAME))
+
+            st.success(
+                f"Loaded full metadata ({len(df_full)} rows) "
+                f"and small metadata ({len(df_small)} rows) from ZIP."
+            )
+            st.write("Full metadata head:", df_full.head())
+
+            # Cache class names for Tab 1 (用完整 metadata 的类别)
+            class_names = sorted(df_full["dx"].unique().tolist())
+            st.session_state["_class_names"] = class_names
+            st.write("Classes found in FULL metadata:", class_names)
+
+            # ---- Step 2: 用完整 metadata 画类别分布饼图 ----
+            st.info("Rendering class distribution pie chart from FULL metadata ...")
+            counts = df_full["dx"].value_counts().sort_index()
             fig, ax = plt.subplots(figsize=(5, 5))
             ax.pie(counts.values, labels=counts.index, autopct="%1.1f%%")
-            ax.set_title("Class distribution (dx)")
+            ax.set_title("Class distribution (dx) – FULL metadata")
             st.pyplot(fig)
-            st.success("Dataset preview finished ✅")
+            st.success("Metadata preview finished ✅")
+
+            # ---- Step 3: 可选 — 用 small metadata + 图片做样例展示 ----
+            st.markdown("---")
+            st.subheader("Optional: sample images from SMALL dataset (faster)")
+
+            show_images = st.checkbox(
+                "Load a few sample images per class from the SMALL dataset in the ZIP",
+                value=False,
+            )
+
+            if show_images:
+                st.info("Step 3/3: Loading sample images from SMALL dataset ...")
+
+                # 每个类别显示几张图
+                n_per_cls = st.slider("Samples per class to display", 1, 5, 3)
+
+                # 用图片文件名建一个 image_id -> zip member 映射（照旧用缓存函数）
+                with st.spinner("Building image_id → ZIP member map (cached) ..."):
+                    name_map = get_zip_name_map()
+                st.write(f"DEBUG: found {len(name_map)} JPG files in ZIP (SMALL dataset).")
+
+                # 小数据集中有哪些 image_id 可以在 ZIP 里找到
+                available_ids = set(name_map.keys())
+
+                with st.spinner("Reading sample images from SMALL dataset in ZIP ..."):
+                    for cls in class_names:
+                        # 用 small metadata，但只保留这个类别 + 在 ZIP 中确实存在的图片
+                        subset = df_small[
+                            (df_small["dx"] == cls) & (df_small["image_id"].isin(available_ids))
+                        ].copy()
+                        total_cls = len(subset)
+                        if total_cls == 0:
+                            continue
+
+                        subset = subset.sample(min(n_per_cls, total_cls), random_state=42)
+
+                        with st.expander(
+                            f"Class: {cls} — {total_cls} images in SMALL metadata"
+                        ):
+                            cols = st.columns(n_per_cls)
+                            for i, (_, row) in enumerate(subset.iterrows()):
+                                img_id = row["image_id"]
+                                member_name = name_map.get(img_id)
+                                with cols[i % n_per_cls]:
+                                    if member_name is None:
+                                        st.write(f"(image {img_id} not found in ZIP)")
+                                        continue
+                                    try:
+                                        img_bytes = zf.read(member_name)
+                                        img = Image.open(io.BytesIO(img_bytes))
+                                        st.image(img, caption=f"{img_id}.jpg")
+                                    except Exception as img_err:
+                                        st.write(f"(image {img_id} not displayable: {img_err})")
+
+                st.success("Sample images from SMALL dataset loaded ✅")
 
         except Exception as e:
             st.error(f"Failed to load dataset preview: {e}")
