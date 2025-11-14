@@ -253,6 +253,22 @@ def find_last_conv_like_layer(keras_model):
                 if isinstance(sub, conv_types):
                     return sub.name
     raise ValueError("No Conv/Separable/Depthwise conv layer found in the model.")
+def list_conv_like_layers(keras_model):
+    """Return a list of names of all Conv-like layers (in order)."""
+    conv_types = (
+        tf.keras.layers.Conv2D,
+        tf.keras.layers.SeparableConv2D,
+        tf.keras.layers.DepthwiseConv2D,
+    )
+    names = []
+    for layer in keras_model.layers:
+        if isinstance(layer, conv_types):
+            names.append(layer.name)
+        if hasattr(layer, "layers"):
+            for sub in layer.layers:
+                if isinstance(sub, conv_types):
+                    names.append(sub.name)
+    return names
 
 
 def make_gradcam_heatmap(
@@ -262,27 +278,11 @@ def make_gradcam_heatmap(
     class_index=None,
 ):
     """
-    Grad-CAM implementation using the gradient of the (pre-softmax) score
-    for a target class w.r.t. a convolutional feature map.
+    Grad-CAM implementation using the gradient of the class score
+    w.r.t. a convolutional feature map.
 
-    Args
-    ----
-    img_array : np.ndarray
-        Preprocessed image array of shape (H, W, 3) or (1, H, W, 3).
-    keras_model : tf.keras.Model
-        Trained classification model.
-    last_conv_layer_name : str or None
-        Name of the last convolution-like layer. If None, we will try to
-        find it automatically with `find_last_conv_like_layer`.
-    class_index : int or None
-        Target class index. If None, will use the model's argmax prediction.
-
-    Returns
-    -------
-    heatmap : np.ndarray
-        Grad-CAM heatmap in [0, 1] with shape (H, W).
-    class_index : int
-        The class index actually used for Grad-CAM.
+    img_array: (H, W, 3) or (1, H, W, 3) preprocessed image.
+    Returns: (heatmap in [0,1] with shape (H, W), class_index actually used)
     """
     # Ensure rank-4 input (1, H, W, 3)
     img_array = np.asarray(img_array, dtype="float32")
@@ -290,12 +290,12 @@ def make_gradcam_heatmap(
         img_array = np.expand_dims(img_array, axis=0)
     img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
 
-    # Decide which conv layer to use
+    # Pick conv layer
     if last_conv_layer_name is None:
         last_conv_layer_name = find_last_conv_like_layer(keras_model)
     last_conv_layer = keras_model.get_layer(last_conv_layer_name)
 
-    # Build a model: input -> (conv feature maps, model outputs)
+    # Build model: input -> (conv feature maps, predictions)
     grad_model = tf.keras.models.Model(
         inputs=keras_model.inputs,
         outputs=[last_conv_layer.output, keras_model.output],
@@ -304,48 +304,44 @@ def make_gradcam_heatmap(
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(img_tensor, training=False)
 
-        # Some AutoKeras models return a list/tuple; we only take the first
+        # Some AutoKeras models return list/tuple
         if isinstance(preds, (list, tuple)):
             preds_tensor = preds[0]
         else:
             preds_tensor = preds
 
-        # Squeeze batch dimension for easier handling
-        # (but keep a batch dimension of size 1 for gradients)
         if class_index is None:
             class_index = int(tf.argmax(preds_tensor[0]))
 
-        # Use the logit / score for the chosen class
-        # If the last layer already has softmax, this is still ok,
-        # but in that case it is "probability" rather than a pure logit.
-        class_channel = preds_tensor[:, class_index]  # shape: (1,)
+        # Class score
+        class_channel = preds_tensor[:, class_index]
 
-    # Gradient of the class score w.r.t. conv feature maps
+    # Gradients of class score w.r.t. conv feature maps
     grads = tape.gradient(class_channel, conv_out)
     if grads is None:
         raise RuntimeError(
             "Gradients are None. Check conv layer name and model structure."
         )
 
-    # Global average pooling over spatial dimensions -> channel weights
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))  # shape: (C,)
+    # Channel-wise weights via global average pooling
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))  # (C,)
 
-    # Remove batch dimension from feature maps
-    conv_out = conv_out[0]  # shape: (Hc, Wc, C)
+    # Remove batch dim for feature maps
+    conv_out = conv_out[0]  # (Hc, Wc, C)
 
     # Weighted sum of feature maps
     heatmap = tf.reduce_sum(conv_out * pooled_grads, axis=-1)  # (Hc, Wc)
 
-    # Apply ReLU
+    # ReLU
     heatmap = tf.nn.relu(heatmap)
 
-    # Normalize to [0, 1]
+    # Normalize to [0,1]
     max_val = tf.reduce_max(heatmap)
     if max_val == 0:
         return np.zeros_like(heatmap.numpy()), class_index
     heatmap = heatmap / max_val
 
-    # Resize to original image size
+    # Resize to input image size
     H, W = img_array.shape[1], img_array.shape[2]
     heatmap = tf.image.resize(heatmap[..., tf.newaxis], (H, W))
     heatmap = tf.squeeze(heatmap).numpy()
@@ -354,16 +350,29 @@ def make_gradcam_heatmap(
 
 
 
-def overlay_heatmap_on_image(img_array, heatmap, alpha=0.35):
-    """Overlay a jet heatmap on the original image."""
+def overlay_heatmap_on_image_pil(img_pil, heatmap, alpha=0.35):
+    """Overlay a jet heatmap on the original-resolution image."""
     import matplotlib.cm as cm
 
-    img_array = np.asarray(img_array, dtype="float32")
+    img = img_pil.convert("RGB")
+    img_array = np.asarray(img).astype("float32") / 255.0
+    H, W = img_array.shape[:2]
+
+    # Make sure heatmap matches original size
     heatmap = np.asarray(heatmap, dtype="float32")
+    if heatmap.shape[0] != H or heatmap.shape[1] != W:
+        heatmap_resized = tf.image.resize(
+            heatmap[np.newaxis, ..., np.newaxis], (H, W)
+        )
+        heatmap_resized = tf.squeeze(heatmap_resized).numpy()
+    else:
+        heatmap_resized = heatmap
 
     base = (img_array.clip(0, 1) * 255).astype(np.uint8)
+
     cmap = cm.get_cmap("jet")
-    color_hm = (cmap(heatmap)[..., :3] * 255).astype(np.uint8)
+    color_hm = (cmap(heatmap_resized)[..., :3] * 255).astype(np.uint8)
+
     overlay = (alpha * color_hm + (1 - alpha) * base).astype(np.uint8)
     return overlay
 
@@ -396,6 +405,18 @@ with TAB1:
 
     model = st.session_state.get("_loaded_model")
     class_names = st.session_state.get("_class_names")
+    # Optional: choose which conv layer to use for Grad-CAM
+    gradcam_layer_name = None
+    if model is not None:
+        if "_conv_layer_names" not in st.session_state:
+            st.session_state["_conv_layer_names"] = list_conv_like_layers(model)
+        conv_layers = st.session_state["_conv_layer_names"]
+        if conv_layers:
+            gradcam_layer_name = st.selectbox(
+                "Grad-CAM convolution layer (from early to late)",
+                conv_layers,
+                index=len(conv_layers) - 1,  # default = last conv layer
+            )
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -475,19 +496,31 @@ with TAB1:
         st.pyplot(plot_prob_bar(labels, probs))
 
         try:
-            last_conv_name = find_last_conv_like_layer(model)
+            # Use the layer picked in the selectbox if available,
+            # otherwise fall back to automatic detection
+            last_conv_name = gradcam_layer_name or find_last_conv_like_layer(model)
+
             heatmap, _ = make_gradcam_heatmap(
-                arr, model, last_conv_layer_name=last_conv_name, class_index=pred_idx
+                arr,
+                model,
+                last_conv_layer_name=last_conv_name,
+                class_index=pred_idx,
             )
-            overlay = overlay_heatmap_on_image(arr, heatmap, alpha=0.35)
+
+            overlay = overlay_heatmap_on_image_pil(img_pil, heatmap, alpha=0.35)
 
             cA, cB, cC = st.columns(3)
             with cA:
-                st.image((arr * 255).astype(np.uint8), caption="Input (resized)")
+                st.image(img_pil, caption="Input (original)")
             with cB:
-                st.image(heatmap, clamp=True, caption="Grad-CAM heatmap")
+                st.image(heatmap, clamp=True, caption=f"Grad-CAM heatmap\n(layer: {last_conv_name})")
             with cC:
-                st.image(overlay, caption="Overlay (jet × input)")
+                st.image(overlay, caption="Overlay (jet × original)")
+        except Exception as e:
+            st.error(f"Grad-CAM generation failed: {e}")
+            st.text("Traceback:")
+            st.text(traceback.format_exc())
+
         except Exception as e:
             st.error(f"Grad-CAM generation failed: {e}")
             st.text("Traceback:")
