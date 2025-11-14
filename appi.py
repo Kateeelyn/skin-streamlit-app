@@ -255,52 +255,86 @@ def find_last_conv_like_layer(keras_model):
     raise ValueError("No Conv/Separable/Depthwise conv layer found in the model.")
 
 
-def make_gradcam_heatmap(img_array, keras_model, last_conv_layer_name, class_index=None):
-    """Classic Grad-CAM implementation."""
-    # Ensure the input is a rank-4 float32 tensor: (1, H, W, 3)
+def make_gradcam_heatmap(
+    img_array,
+    keras_model,
+    last_conv_layer_name=None,
+    class_index=None,
+):
+    """
+    Grad-CAM implementation using the gradient of the (pre-softmax) score
+    for a target class w.r.t. a convolutional feature map.
+
+    Args
+    ----
+    img_array : np.ndarray
+        Preprocessed image array of shape (H, W, 3) or (1, H, W, 3).
+    keras_model : tf.keras.Model
+        Trained classification model.
+    last_conv_layer_name : str or None
+        Name of the last convolution-like layer. If None, we will try to
+        find it automatically with `find_last_conv_like_layer`.
+    class_index : int or None
+        Target class index. If None, will use the model's argmax prediction.
+
+    Returns
+    -------
+    heatmap : np.ndarray
+        Grad-CAM heatmap in [0, 1] with shape (H, W).
+    class_index : int
+        The class index actually used for Grad-CAM.
+    """
+    # Ensure rank-4 input (1, H, W, 3)
     img_array = np.asarray(img_array, dtype="float32")
     if img_array.ndim == 3:
         img_array = np.expand_dims(img_array, axis=0)
     img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
 
-    # Get the specified convolutional layer
+    # Decide which conv layer to use
+    if last_conv_layer_name is None:
+        last_conv_layer_name = find_last_conv_like_layer(keras_model)
     last_conv_layer = keras_model.get_layer(last_conv_layer_name)
 
-    # Build a model that maps input → (conv feature maps, predictions)
+    # Build a model: input -> (conv feature maps, model outputs)
     grad_model = tf.keras.models.Model(
         inputs=keras_model.inputs,
         outputs=[last_conv_layer.output, keras_model.output],
     )
 
-    # Record gradients of the target class score w.r.t. conv feature maps
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(img_tensor, training=False)
 
-        # Handle multi-output models: preds can be a list/tuple of tensors.
+        # Some AutoKeras models return a list/tuple; we only take the first
         if isinstance(preds, (list, tuple)):
             preds_tensor = preds[0]
         else:
             preds_tensor = preds
 
+        # Squeeze batch dimension for easier handling
+        # (but keep a batch dimension of size 1 for gradients)
         if class_index is None:
             class_index = int(tf.argmax(preds_tensor[0]))
 
-        # Scalar representing the probability for the selected class
-        class_channel = preds_tensor[:, class_index]
+        # Use the logit / score for the chosen class
+        # If the last layer already has softmax, this is still ok,
+        # but in that case it is "probability" rather than a pure logit.
+        class_channel = preds_tensor[:, class_index]  # shape: (1,)
 
-    # Compute gradients
+    # Gradient of the class score w.r.t. conv feature maps
     grads = tape.gradient(class_channel, conv_out)
     if grads is None:
-        raise RuntimeError("Gradients are None. Check conv layer name / model structure.")
+        raise RuntimeError(
+            "Gradients are None. Check conv layer name and model structure."
+        )
 
-    # Global-average-pool the gradients over spatial dimensions to get channel weights
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    # Global average pooling over spatial dimensions -> channel weights
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))  # shape: (C,)
 
-    # Remove batch dimension from the feature map
-    conv_out = conv_out[0]
+    # Remove batch dimension from feature maps
+    conv_out = conv_out[0]  # shape: (Hc, Wc, C)
 
-    # Weight each channel by its importance and sum across channels
-    heatmap = tf.reduce_sum(conv_out * pooled_grads, axis=-1)
+    # Weighted sum of feature maps
+    heatmap = tf.reduce_sum(conv_out * pooled_grads, axis=-1)  # (Hc, Wc)
 
     # Apply ReLU
     heatmap = tf.nn.relu(heatmap)
@@ -308,19 +342,16 @@ def make_gradcam_heatmap(img_array, keras_model, last_conv_layer_name, class_ind
     # Normalize to [0, 1]
     max_val = tf.reduce_max(heatmap)
     if max_val == 0:
-        # Avoid division by zero; return a blank heatmap
         return np.zeros_like(heatmap.numpy()), class_index
-
     heatmap = heatmap / max_val
 
-    # Resize to the size of the input image (H, W)
+    # Resize to original image size
     H, W = img_array.shape[1], img_array.shape[2]
     heatmap = tf.image.resize(heatmap[..., tf.newaxis], (H, W))
-
-    # Convert back to NumPy and squeeze channel dimension
     heatmap = tf.squeeze(heatmap).numpy()
 
     return heatmap, class_index
+
 
 
 def overlay_heatmap_on_image(img_array, heatmap, alpha=0.35):
