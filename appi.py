@@ -390,31 +390,27 @@ with TAB1:
         st.pyplot(plot_prob_bar(labels, probs))
 
         try:
-            last_conv_name = find_last_conv_like_layer(model)
+            if gradcam_layer_name is not None:
+                layer_to_use = gradcam_layer_name
+            else:
+                layer_to_use = find_last_conv_like_layer(model)
 
-            heatmap, _ = make_gradcam_heatmap_tf2(
-                arr, model, last_conv_layer_name=last_conv_name, class_index=pred_idx
+            heatmap, _ = make_gradcam_heatmap_tf2(arr,model,last_conv_layer_name=layer_to_use,class_index=pred_idx,
             )
-
             overlay = overlay_heatmap_on_pil(img_pil, heatmap, alpha=0.35)
 
             cA, cB, cC = st.columns(3)
             with cA:
                 st.image(img_pil, caption="Input (original)", use_container_width=True)
             with cB:
-                st.image(
-                    heatmap,
-                    clamp=True,
-                    caption=f"Grad-CAM heatmap ({last_conv_name})",
-                    use_container_width=True,
+                st.image(heatmap,clamp=True,caption=f"Grad-CAM heatmap ({layer_to_use})",use_container_width=True,
                 )
             with cC:
-                st.image(overlay, caption="Overlay (jet × original)", use_container_width=True)
+                st.image(overlay,caption="Overlay (jet × original)",use_container_width=True,)
 
         except Exception as e:
             st.error(f"Grad-CAM failed: {e}")
             st.text(traceback.format_exc())
-
     else:
         st.info("Load a model and upload an image to run prediction + Grad-CAM.")
 
