@@ -271,17 +271,25 @@ def list_conv_like_layers(keras_model):
                     names.append(sub.name)
     return names
 
-def plot_prob_bar(labels, probs):
-    """Bar plot of class probabilities."""
-    fig, ax = plt.subplots(figsize=(4.5, 3.2))
+def plot_prob_bar(labels, probs, full_label_map=None):
+    # If full names exist, convert labels to full names
+    if full_label_map is not None:
+        display_labels = [full_label_map[l] for l in labels]
+    else:
+        display_labels = labels
+
+    fig, ax = plt.subplots(figsize=(6, 4))
     order = np.argsort(-probs)
-    ax.bar([labels[i] for i in order], probs[order])
+
+    ax.bar([display_labels[i] for i in order], probs[order])
     ax.set_ylim(0, 1)
     ax.set_ylabel("Probability")
     ax.set_xlabel("Class")
     ax.set_title("Predicted probabilities")
+    plt.xticks(rotation=35, ha="right")
     fig.tight_layout()
     return fig
+
 
 
 # ---------------------------
@@ -386,8 +394,20 @@ with TAB1:
         else:
             labels = np.array(class_names)
 
-        st.markdown(f"**Predicted class:** {labels[pred_idx]}")
-        st.pyplot(plot_prob_bar(labels, probs))
+        class_expl = {
+            "akiec": "Actinic keratoses and intraepithelial carcinoma / Bowen’s disease",
+            "bcc": "Basal cell carcinoma",
+            "bkl": "Benign keratosis-like lesions (solar lentigines / seborrheic keratoses / lichen-planus like keratoses)",
+            "df": "Dermatofibroma",
+            "mel": "Melanoma",
+            "nv": "Melanocytic nevi",
+            "vasc": "Vascular lesions (angiomas, angiokeratomas, pyogenic granulomas, hemorrhage)"
+        }
+        full_name = class_expl[labels[pred_idx]]
+
+        st.markdown(f"**Predicted class:** `{labels[pred_idx]}` — **{full_name}**")
+
+        st.pyplot(plot_prob_bar(labels, probs, full_label_map=class_expl))
 
         try:
             if gradcam_layer_name is not None:
