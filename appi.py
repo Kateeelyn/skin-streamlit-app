@@ -271,27 +271,17 @@ def list_conv_like_layers(keras_model):
                     names.append(sub.name)
     return names
 
-def plot_prob_bar(labels, probs, full_label_map=None):
-    # Decide what to display on x-axis
-    display_labels = list(labels)
 
-    if full_label_map is not None:
-        # Only use full names if ALL labels are in the map
-        if all((lbl in full_label_map) for lbl in labels):
-            display_labels = [full_label_map[lbl] for lbl in labels]
-
-    fig, ax = plt.subplots(figsize=(6, 4))
+def plot_prob_bar(labels, probs):
+    fig, ax = plt.subplots(figsize=(4.5, 3.2))
     order = np.argsort(-probs)
-
-    ax.bar([display_labels[i] for i in order], probs[order])
+    ax.bar([labels[i] for i in order], probs[order])
     ax.set_ylim(0, 1)
     ax.set_ylabel("Probability")
     ax.set_xlabel("Class")
     ax.set_title("Predicted probabilities")
-    plt.xticks(rotation=35, ha="right")
     fig.tight_layout()
     return fig
-
 
 
 # ---------------------------
@@ -407,15 +397,8 @@ with TAB1:
         }
         pred_label = labels[pred_idx]
 
-        # Try to look up full name; if not found, just show the label itself
-        if isinstance(pred_label, (str, np.str_)) and pred_label in class_expl:
-            full_name = class_expl[pred_label]
-            st.markdown(f"**Predicted class:** `{pred_label}` — **{full_name}**")
-            st.pyplot(plot_prob_bar(labels, probs, full_label_map=class_expl))
-        else:
-            # Fallback: labels are numeric indices or not in class_expl yet
-            st.markdown(f"**Predicted class index:** {pred_idx}")
-            st.pyplot(plot_prob_bar(labels, probs))
+        st.markdown(f"**Predicted class:** {labels[pred_idx]}")
+        st.pyplot(plot_prob_bar(labels, probs))
 
         try:
             if gradcam_layer_name is not None:
