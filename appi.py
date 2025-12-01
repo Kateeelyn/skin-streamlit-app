@@ -387,17 +387,17 @@ with TAB1:
             labels = np.array(class_names)
 
         class_expl = {
-            "akiec": "Actinic keratoses and intraepithelial carcinoma / Bowen’s disease",
-            "bcc": "Basal cell carcinoma",
-            "bkl": "Benign keratosis-like lesions (solar lentigines / seborrheic keratoses / lichen-planus like keratoses)",
-            "df": "Dermatofibroma",
-            "mel": "Melanoma",
-            "nv": "Melanocytic nevi",
-            "vasc": "Vascular lesions (angiomas, angiokeratomas, pyogenic granulomas, hemorrhage)"
+            0: "akiec",
+            1: "bcc",
+            2: "bkl",
+            3: "df",
+            4: "mel",
+            5: "nv",
+            6: "vasc"
         }
         pred_label = labels[pred_idx]
 
-        st.markdown(f"**Predicted class:** {labels[pred_idx]}")
+        st.markdown(f"**Predicted class:** {class_expl[int(labels[pred_idx])]}")
         st.pyplot(plot_prob_bar(labels, probs))
 
         try:
